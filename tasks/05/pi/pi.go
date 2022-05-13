@@ -9,6 +9,7 @@ const (
 )
 
 func CalculatePi(concurrent int, iterations int, gen RandomPointGenerator) float64 {
+	// create worker group
 	var wg sync.WaitGroup
 	wg.Add(concurrent)
 
