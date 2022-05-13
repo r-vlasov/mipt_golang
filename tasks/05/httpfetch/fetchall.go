@@ -18,6 +18,7 @@ type Result struct {
 }
 
 func FetchAll(c *http.Client, requests []Request) []Result {
+	
 	// define group of goroutines
 	var wg sync.WaitGroup
 	quantityReq := len(requests)
