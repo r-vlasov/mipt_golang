@@ -47,6 +47,7 @@ func CalculatePi(concurrent int, iterations int, gen RandomPointGenerator) float
 
 	// waiting
 	wg.Wait()
+	close(workerChannel)
 
 	// 4 - is a constant of normalization (in 1x1 quadrate located circle with pi / 4 square)
 	return 4 * float64(totalInCircle) / float64(iterations)
