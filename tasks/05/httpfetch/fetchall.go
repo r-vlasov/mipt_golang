@@ -22,7 +22,7 @@ func FetchAll(c *http.Client, requests []Request) []Result {
 	var wg sync.WaitGroup
 	quantityReq := len(requests)
 	wg.Add(quantityReq)
-	results := make([]Result, quantityReq) // returned values
+	results := make([]Result, quantityReq)
 
 	// main worker to goroutine that create request and fill results array
 	requestWorker := func(i int) {
