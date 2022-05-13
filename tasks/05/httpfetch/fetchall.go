@@ -16,5 +16,6 @@ type Result struct {
 }
 
 func FetchAll(c *http.Client, requests []Request) []Result {
+
 	return nil
 }
