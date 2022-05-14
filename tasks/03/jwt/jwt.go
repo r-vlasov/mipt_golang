@@ -13,9 +13,6 @@ import (
 )
 
 
-// To mock time in tests
-var timeFunc = time.Now
-
 type header struct {
         Algorithm       SignMethod      `json:"alg"`
         Type            string          `json:"typ"`
@@ -23,8 +20,21 @@ type header struct {
 
 // our payload format has structure {'d': something...., 'exp' : time...}
 type payload struct {
-        Data            interface{}     `json:"d"`
+        Data            interface{}	`json:"d"`
         ExpTime         int64           `json:"exp,omitempty"`
+}
+
+// special for decoding
+type payloadDecoded struct {
+        Data            json.RawMessage	`json:"d"`	// output
+        ExpTime         int64           `json:"exp,omitempty"`
+}
+
+// special for decoding
+type jwtParts struct {
+        Header          header
+        Payload		payloadDecoded
+        Signature       []byte
 }
 
 type SignMethod string
@@ -66,7 +76,7 @@ func jwtConfigParse(configuration *config) (error) {
         return nil
 }
 
-func b64Json(data interface{}) (string, error) {
+func b64JsonEncode(data interface{}) (string, error) {
         js, err := json.Marshal(data)
         if err != nil {
                 return "", err
@@ -74,9 +84,22 @@ func b64Json(data interface{}) (string, error) {
         return b64.RawURLEncoding.EncodeToString(js), nil
 }
 
+func b64JsonDecode(data []byte, dstData interface{}) (error) {
+	decodedB64Data := make([]byte, b64.RawURLEncoding.DecodedLen(len(data)))
+	_, err := b64.RawURLEncoding.Decode(decodedB64Data, data)
+        if err != nil {
+                return ErrInvalidToken
+        }
+        err = json.Unmarshal(decodedB64Data, dstData)
+        if err != nil {
+                return ErrInvalidToken
+        }
+        return nil
+}
+
 func encodedHeaderAssembly(configuration *config) (string) {
         // there will be no error
-        jsonB64Header, _ := b64Json(header {
+        jsonB64Header, _ := b64JsonEncode(header {
                 Algorithm:      configuration.SignMethod,
                 Type:           "JWT",
         })
@@ -94,11 +117,17 @@ func encodedPayloadAssembly(configuration *config, data interface{}) (string) {
 
         // else expTime will be 0 by default
         // there will be no error
-        jsonB64Payload, _ := b64Json(payload {
+        jsonB64Payload, _ := b64JsonEncode(payload {
                 Data:           data,
                 ExpTime:        expTime,
         })
         return jsonB64Payload
+}
+
+func hmacSignature(hashMethod func() (hash.Hash), key []byte, data []byte) []byte {
+        mac := hmac.New(hashMethod, key)
+        mac.Write(data)
+        return mac.Sum(nil)
 }
 
 func jwtAssembly(configuration *config, jwtB64Header string, jwtB64Payload string) ([]byte, error) {
@@ -112,16 +141,13 @@ func jwtAssembly(configuration *config, jwtB64Header string, jwtB64Payload strin
                 return nil, ErrInvalidSignMethod
         }
 
-        mac := hmac.New(hashMethod, configuration.Key)
-        mac.Write(jwt.Bytes())
-        jwtHMACbytes := mac.Sum(nil)
+        jwtHMACbytes := hmacSignature(hashMethod, configuration.Key, jwt.Bytes())
         jwtSign := b64.RawURLEncoding.EncodeToString(jwtHMACbytes)
 
         jwt.WriteString(".")
         jwt.WriteString(jwtSign)
         return jwt.Bytes(), nil
 }
-
 
 func Encode(data interface{}, opts ...Option) ([]byte, error) {
         jwtConfiguration := assemblyJWTConfig(opts)
@@ -139,9 +165,110 @@ func Encode(data interface{}, opts ...Option) ([]byte, error) {
         return jwt, nil
 }
 
+func jwtB64DecodeParts(splittedParts [][]byte) (*jwtParts, error) {
+        jwtparts := new(jwtParts)
 
-func Decode(token []byte, data interface{}, opts ...Option) error {
+        // check header
+	err := b64JsonDecode(splittedParts[0], &jwtparts.Header)
+        if err != nil {
+                return nil, ErrInvalidToken
+        }
+
+        // check payload
+        err = b64JsonDecode(splittedParts[1], &jwtparts.Payload)
+        if err != nil {
+                return nil, ErrInvalidToken
+        }
+
+        // decode hmac
+	jwtparts.Signature = make([]byte, b64.RawURLEncoding.DecodedLen(len(splittedParts[2])))
+	_, err = b64.RawURLEncoding.Decode(jwtparts.Signature, splittedParts[2])
+	if err != nil {
+                return nil, ErrSignatureInvalid
+        }
+        return jwtparts, nil
+}
+
+func jwtTokenSplitDecode(token []byte) (*jwtParts, error) {
+        splittedParts := bytes.Split(token, []byte("."))
+        // incorrent amount of partitions
+        if len(splittedParts) != 3 {
+                return nil, ErrInvalidToken
+        }
+        return jwtB64DecodeParts(splittedParts)
+}
+
+// true -> already expired
+func jwtIsAlreadyExpired(jwt *jwtParts) (error) {
+	// first - default variable when ExpTime is not located in JWT
+        if jwt.Payload.ExpTime != 0 && timeFunc().After(time.Unix(jwt.Payload.ExpTime, 0)) {
+		return ErrTokenExpired
+	}
+	return nil
+}
+
+func jwtCheckHeader(configuration *config, jwt *jwtParts) (error) {
+        if jwt.Header.Type != "JWT" {
+                return ErrInvalidToken
+        }
+
+        if jwt.Header.Algorithm != configuration.SignMethod {
+                return ErrSignMethodMismatched
+        }
+        _, ok := HASHSIGNFUNCTION[jwt.Header.Algorithm]
+        if !ok {
+                return ErrInvalidSignMethod
+        }
         return nil
 }
 
+// function takes slice to avoid redundant copying
+func jwtSignatureValidation(configuration *config, expectedSignature []byte, headerAndPayload []byte) (error) {
+        hashMethod, _ := HASHSIGNFUNCTION[configuration.SignMethod]
+        if bytes.Compare(expectedSignature, hmacSignature(hashMethod, configuration.Key, headerAndPayload)) != 0 {
+                return ErrSignatureInvalid
+	}
+	return nil
+}
 
+
+func Decode(token []byte, data interface{}, opts ...Option) error {
+        jwtConfiguration := assemblyJWTConfig(opts)
+        jwt, err := jwtTokenSplitDecode(token)
+        if err != nil {
+                return err
+        }
+
+        // check signature methods in header
+        err = jwtCheckHeader(jwtConfiguration, jwt)
+        if err != nil {
+                return err
+        }
+
+	// work with token []byte to avoid redundant copying
+	// validate signature
+	headerAndPayload := token[:bytes.LastIndex(token, []byte("."))]
+	err = jwtSignatureValidation(jwtConfiguration, jwt.Signature, headerAndPayload)
+	if err != nil {
+		return err
+	}
+
+        // check expire time
+        err = jwtIsAlreadyExpired(jwt)
+	if err != nil {
+                return err
+        }
+
+	// extract data
+	// Для анмаршалинга нужна "схема Json", то есть просто так jsonned interface{} -> interface{}
+	// вроде бы нельзя сконвертировать. Поэтому я и заменил Payload.Data -> json.RawMessage
+	err = json.Unmarshal(jwt.Payload.Data, data)
+	if err != nil {
+		return ErrInvalidToken
+	}
+	return nil
+}
+
+
+// To mock time in tests
+var timeFunc = time.Now
