@@ -26,8 +26,7 @@ func CalculatePi(concurrent int, iterations int, gen RandomPointGenerator) float
                         }
                 }
                 workerChannel <- inCircle
-
-                defer wg.Done()
+		wg.Done()
         }
 
         // total count of iterations = iterations
