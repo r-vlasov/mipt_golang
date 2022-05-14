@@ -56,4 +56,3 @@ func CalculatePi(concurrent int, iterations int, gen RandomPointGenerator) float
 type RandomPointGenerator interface {
         Next() (float64, float64)
 }
-       
