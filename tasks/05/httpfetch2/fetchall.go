@@ -22,6 +22,7 @@ type Result struct {
 
 func FetchAll(ctx context.Context, c *http.Client, requests <-chan Request) <-chan Result {
         var wg sync.WaitGroup
+	// create channel for communication
         ch := make(chan Result)
 
         // main httprequest worker
