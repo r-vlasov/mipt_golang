@@ -20,8 +20,6 @@ type Result struct {
 }
 
 
-
-
 func FetchAll(ctx context.Context, c *http.Client, requests <-chan Request) <-chan Result {
         var wg sync.WaitGroup
         ch := make(chan Result)
